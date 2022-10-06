@@ -4,8 +4,18 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "mocha"
   },
   "author": "",
-  "license": "ISC"
+  "license": "ISC",
+  "dependencies": {
+    "@truffle/hdwallet-provider": "2.0.16",
+    "ganache-cli": "6.12.2",
+    "mocha": "10.0.0",
+    "solc": "0.8.9",
+    "web3": "1.8.0"
+  },
+  "engines": {
+    "node": ">=16.0.0 <17.0.0"
+  }
 }
