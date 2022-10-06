@@ -1,14 +1,12 @@
-// https://infura.io/dashboard/ethereum/b8636711061a4f439d6d616cbd84a403/settings
-// https://goerli.etherscan.io/address/0xc0ed2724680188d81abef54869ae9c6e1d04753e
-
+require('dotenv').config();
 const HDWalletProvider = require('@truffle/hdwallet-provider');
 const Web3 = require('web3');
 
 const {abi, evm} = require('../compile');
 
 const provider = new HDWalletProvider(
-    '',
-    ''
+    process.env.MNEMONIC,
+    process.env.NODE_ENDPOINT
 );
 
 const web3 = new Web3(provider);
