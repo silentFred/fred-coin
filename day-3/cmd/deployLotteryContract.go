@@ -14,7 +14,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
-	"github.com/ethereum/go-ethereum/params"
 )
 
 const TestContractAddress = "0xEf4B9cf94fC0139880c4aE697fa09Fbf71600c05"
@@ -28,12 +27,12 @@ func deployAndTestLotteryContract() *cobra.Command {
 			log.Println("current account balance is: ", balance)
 
 			log.Println("deploying contract...")
-			_, address := DeployContract()
+			_, address, _ := DeployContract()
 
 			log.Println("contract deployed to address: ", address)
 
 			log.Println("entering the lottery...")
-			EnterLottery()
+			_, _ = EnterLottery()
 
 			balanceAfterEntry, _ := GetAccountBalance()
 			log.Println("current account balance after lottery entry is: ", balanceAfterEntry)
@@ -49,12 +48,13 @@ func deployAndTestLotteryContract() *cobra.Command {
 }
 
 func GetAccountBalance() (*big.Int, error) {
-	client := GetClient()
+	client, err := GetClient()
+	if err != nil {
+		return nil, err
+	}
 
-	ctx := context.Background()
-	// Get Balance of an account (nil means at newest block)
-	addr := common.HexToAddress(os.Getenv("ACCOUNT_ADDRESS"))
-	balance, err := client.BalanceAt(ctx, addr, nil)
+	address := common.HexToAddress(os.Getenv("ACCOUNT_ADDRESS"))
+	balance, err := client.BalanceAt(context.Background(), address, nil)
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to call contract: %w", err)
@@ -63,32 +63,47 @@ func GetAccountBalance() (*big.Int, error) {
 	return balance, nil
 }
 
-func EnterLottery() *types.Transaction {
-	client := GetClient()
+func EnterLottery() (*types.Transaction, error) {
+	client, err := GetClient()
+	if err != nil {
+		return nil, err
+	}
 
 	lotteryContract, err := lottery.NewLottery(common.HexToAddress(TestContractAddress), client)
 	if err != nil {
-		log.Fatalf("Failed to instantiate Storage contract: %v", err)
+		return nil, fmt.Errorf("failed to instantiate Storage contract: %w", err)
 	}
 
-	auth := GetTransactor(client)
+	transactionOptions, err := GetTransactionOptions(client)
+	if err != nil {
+		return nil, err
+	}
 
-	nonce, _ := client.PendingNonceAt(context.Background(), common.HexToAddress(os.Getenv("ACCOUNT_ADDRESS")))
-	auth.Nonce = big.NewInt(int64(nonce))
-	auth.Value = big.NewInt(12000000000000000)
-	auth.GasLimit = uint64(300000)
+	nonce, err := client.PendingNonceAt(context.Background(), common.HexToAddress(os.Getenv("ACCOUNT_ADDRESS")))
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch pending nonce: %w", err)
+	}
 
-	enter, err := lotteryContract.Enter(auth)
+	transactionOptions.Nonce = big.NewInt(int64(nonce))
+	transactionOptions.Value = big.NewInt(12000000000000000)
+	transactionOptions.GasLimit = uint64(300000)
+
+	transaction, err := lotteryContract.Enter(transactionOptions)
 
 	if err != nil {
-		log.Fatalf("Failed to fetch lottery players: %v", err)
+		return nil, fmt.Errorf("failed to fetch lottery players: %w", err)
 	}
-	log.Println("Lottery entered: ", enter.Hash())
-	return enter
+
+	log.Println("Lottery entered: ", transaction.Hash())
+	return transaction, nil
 }
 
 func GetLotteryPlayers() ([]common.Address, error) {
-	client := GetClient()
+	client, err := GetClient()
+	if err != nil {
+		return nil, err
+	}
+
 	lotteryContract, err := lottery.NewLottery(common.HexToAddress(TestContractAddress), client)
 	if err != nil {
 		return nil, fmt.Errorf("failed to bind lottery contract: %w", err)
@@ -103,13 +118,20 @@ func GetLotteryPlayers() ([]common.Address, error) {
 }
 
 func PickLotteryWinner() (*types.Transaction, error) {
-	client := GetClient()
+	client, err := GetClient()
+	if err != nil {
+		return nil, err
+	}
+
 	lotteryContract, err := lottery.NewLottery(common.HexToAddress(TestContractAddress), client)
 	if err != nil {
 		return nil, fmt.Errorf("failed to bind lottery contract: %w", err)
 	}
 
-	auth := GetTransactor(client)
+	auth, err := GetTransactionOptions(client)
+	if err != nil {
+		return nil, err
+	}
 
 	nonce, _ := client.PendingNonceAt(context.Background(), common.HexToAddress(os.Getenv("ACCOUNT_ADDRESS")))
 	auth.Nonce = big.NewInt(int64(nonce))
@@ -124,96 +146,58 @@ func PickLotteryWinner() (*types.Transaction, error) {
 	return winner, nil
 }
 
-func DeployContract() (*lottery.Lottery, common.Address) {
+func DeployContract() (*lottery.Lottery, common.Address, error) {
 
-	cl := GetClient()
-
-	transactOpts := GetTransactor(cl)
-
-	// Deploy a CoolContract
-	addr, tx, contract, err := lottery.DeployLottery(transactOpts, cl)
+	client, err := GetClient()
 	if err != nil {
-		log.Fatal(err)
+		return nil, common.Address{}, err
 	}
-	_ = addr
+
+	transactionOptions, err := GetTransactionOptions(client)
+	if err != nil {
+		return nil, common.Address{}, err
+	}
+
+	contractAddress, transaction, contract, err := lottery.DeployLottery(transactionOptions, client)
+	if err != nil {
+		return nil, common.Address{}, fmt.Errorf("failed to deploy contract: %w", err)
+	}
+	_ = contractAddress
 	_ = contract
 
 	// Wait until the contract is deployed
-	addr, err = bind.WaitDeployed(context.Background(), cl, tx)
+	contractAddress, err = bind.WaitDeployed(context.Background(), client, transaction)
 	if err != nil {
-		log.Fatal(err)
+		return nil, common.Address{}, fmt.Errorf("error occured while waiting for contract to deploy: %w", err)
 	}
-	fmt.Printf("Contract deployed at %v\n", addr)
 
-	return contract, addr
+	fmt.Printf("Contract deployed at %v\n", contractAddress)
+
+	return contract, contractAddress, nil
 }
 
-func GetTransactor(cl *ethclient.Client) *bind.TransactOpts {
+func GetTransactionOptions(cl *ethclient.Client) (*bind.TransactOpts, error) {
 	var (
 		sk = crypto.ToECDSAUnsafe(common.FromHex(os.Getenv("ACCOUNT_PRIVATE_KEY")))
 	)
 	// Retrieve the chainid (needed for signer)
 	chainid, err := cl.ChainID(context.Background())
 	if err != nil {
-		log.Fatal(err)
+		return nil, fmt.Errorf("failed to fetch chain id: %w", err)
 	}
 
 	// Create the transactOpts (signer)
 	transactOpts, err := bind.NewKeyedTransactorWithChainID(sk, chainid)
 	if err != nil {
-		log.Fatal(err)
+		return nil, fmt.Errorf("failed to create keyed transaction: %w", err)
 	}
-	return transactOpts
+	return transactOpts, nil
 }
 
-func SendTransaction(cl *ethclient.Client) error {
-	var (
-		sk       = crypto.ToECDSAUnsafe(common.FromHex(os.Getenv("ACCOUNT_PRIVATE_KEY")))
-		to       = common.HexToAddress("0xa8467374a4288582CA894EF0127f48B35D0F35d0")
-		value    = new(big.Int).Mul(big.NewInt(1), big.NewInt(params.Ether))
-		sender   = common.HexToAddress(os.Getenv("ACCOUNT_ADDRESS"))
-		gasLimit = uint64(21000)
-	)
-
-	// Retrieve the chainid (needed for signer)
-	chainid, err := cl.ChainID(context.Background())
-	if err != nil {
-		return err
-	}
-
-	// Retrieve the pending nonce
-	nonce, err := cl.PendingNonceAt(context.Background(), sender)
-	if err != nil {
-		return err
-	}
-
-	// Get suggested gas price
-	tipCap, _ := cl.SuggestGasTipCap(context.Background())
-	feeCap, _ := cl.SuggestGasPrice(context.Background())
-	// Create a new transaction
-	tx := types.NewTx(
-		&types.DynamicFeeTx{
-			ChainID:   chainid,
-			Nonce:     nonce,
-			GasTipCap: tipCap,
-			GasFeeCap: feeCap,
-			Gas:       gasLimit,
-			To:        &to,
-			Value:     value,
-			Data:      nil,
-		})
-
-	// Sign the transaction using our keys
-	signedTx, _ := types.SignTx(tx, types.NewLondonSigner(chainid), sk)
-
-	// Send the transaction to our node
-	return cl.SendTransaction(context.Background(), signedTx)
-}
-
-func GetClient() *ethclient.Client {
+func GetClient() (*ethclient.Client, error) {
 	client, err := ethclient.Dial(os.Getenv("NODE_ENDPOINT"))
 	if err != nil {
-		log.Fatalln(err)
+		return nil, fmt.Errorf("failed to create eth client: %w", err)
 	}
-	return client
+	return client, nil
 }
